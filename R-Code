@@ -1,0 +1,697 @@
+# For use with Retention/Churn Exercise
+#libraries from the Scholastic case
+library(lubridate)
+library(dplyr)
+library(psych)
+
+library(BBmisc)# nice normalize function
+library(purrr)
+library(C50)
+library(psych)
+library(neuralnet)
+library(dplyr)
+library(pdp)
+library(gmodels)
+library(randomForest)
+library(caret)
+library(lubridate)
+library(pacman)
+library(MASS)
+library(ROCR)
+library(lift)
+library(stringr)
+library(nnet)
+library(mltools)
+library(data.table)
+
+#Read in data file ** put in your path **
+
+Transact.df<-read.csv("/Users/fangling/Downloads/ISMSDataset1.csv",stringsAsFactors=FALSE)
+
+# Fix dates - Create year variable
+
+Transact.df$TRANSACTION_DATE_2<-ymd(dmy_hms(Transact.df$TRANSACTION_DATE))
+Transact.df$TRANSACTION_DATE_YR<-year(Transact.df$TRANSACTION_DATE_2)
+
+#Transact.df_original<-Transact.df
+
+
+#ALYSSA'S NEW CATEGORY DUMMY VARIABLES (everything but other)
+Transact.df$cat_music <-ifelse(Transact.df$CATEGORY_DESCRIPTION== "MUSIC",1,0)
+Transact.df$cat_TV <-ifelse(Transact.df$CATEGORY_DESCRIPTION== "TELEVISION",1,0)
+Transact.df$cat_DVS <-ifelse(Transact.df$CATEGORY_DESCRIPTION== "DVS",1,0)
+Transact.df$cat_audio <-ifelse(Transact.df$CATEGORY_DESCRIPTION== "AUDIO",1,0)
+Transact.df$cat_vid_hdwr <-ifelse(Transact.df$CATEGORY_DESCRIPTION== "VIDEO HDWR",1,0)
+Transact.df$cat_PST <-ifelse(Transact.df$CATEGORY_DESCRIPTION== "P*S*T",1,0)
+Transact.df$cat_vid_IMAGING <-ifelse(Transact.df$CATEGORY_DESCRIPTION== "IMAGING",1,0)
+Transact.df$cat_HOME_INS <-ifelse(Transact.df$CATEGORY_DESCRIPTION== "HOME INS",1,0)
+Transact.df$cat_MOBILE <-ifelse(Transact.df$CATEGORY_DESCRIPTION== "MOBILE",1,0)
+Transact.df$cat_WIRELESS <-ifelse(Transact.df$CATEGORY_DESCRIPTION== "WIRELESS",1,0)
+Transact.df$cat_PC_HDWR <-ifelse(Transact.df$CATEGORY_DESCRIPTION== "PC HDWR",1,0)
+Transact.df$cat_MAJORS <-ifelse(Transact.df$CATEGORY_DESCRIPTION== "MAJORS",1,0)
+Transact.df$cat_GIFT_CARDS <-ifelse(Transact.df$CATEGORY_DESCRIPTION== "GIFT CARDS",1,0)
+Transact.df$cat_EXPRESS <-ifelse(Transact.df$CATEGORY_DESCRIPTION== "EXPRESS",1,0)
+Transact.df$cat_INTABGIBLE <-ifelse(Transact.df$CATEGORY_DESCRIPTION== "INTABGIBLE",1,0)
+
+#ALYSSA'S NEW TRANSACTION TYPE DUMMIES: (all but miscellaneous)
+Transact.df$product_purch <- ifelse(Transact.df$TRANSACTION_TYPE== 1,1,0)
+Transact.df$product_return <- ifelse(Transact.df$TRANSACTION_TYPE== 2,1,0)
+Transact.df$service_contract_purch <- ifelse(Transact.df$TRANSACTION_TYPE== 3,1,0)
+Transact.df$service_contract_return <- ifelse(Transact.df$TRANSACTION_TYPE== 4,1,0)
+Transact.df$disc_prod_purch <- ifelse(Transact.df$TRANSACTION_TYPE== 5,1,0)
+Transact.df$miscell <- ifelse(Transact.df$TRANSACTION_TYPE== 6,1,0)
+
+#ALYSSA'S NEW TRANSACTION TYPE DESCRIPTION DUMMIES
+#for all but CIN (only 5 observations)
+Transact.df$ESP <- ifelse(Transact.df$TRANSACTION_TYPE_DESCRIPTION== "ESP",1,0)
+Transact.df$giftcard_tradein <- ifelse(Transact.df$TRANSACTION_TYPE_DESCRIPTION== "GFT" | Transact.df$TRANSACTION_TYPE_DESCRIPTION== "VLK",1,0)
+Transact.df$SVL <- ifelse(Transact.df$TRANSACTION_TYPE_DESCRIPTION== "SVL",1,0)
+Transact.df$INS <- ifelse(Transact.df$TRANSACTION_TYPE_DESCRIPTION== "INS",1,0)
+Transact.df$SHI <- ifelse(Transact.df$TRANSACTION_TYPE_DESCRIPTION== "SHI",1,0)
+Transact.df$SAL <- ifelse(Transact.df$TRANSACTION_TYPE_DESCRIPTION== "SAL",1,0)
+Transact.df$PAG <- ifelse(Transact.df$TRANSACTION_TYPE_DESCRIPTION== "PAG",1,0)
+
+
+#Alyssa: recoding return and gender dummies
+Transact.df$RETURN <- ifelse(Transact.df$RETURN_IND== "Y",1,0)
+##Transact.df$HEAD_GENDER_F <- ifelse(Transact.df$GENDER_H_HEAD== "F",1,0) #1 IF FEMALE
+##Transact.df$GENDER_INDIVIDUAL_F <- ifelse(Transact.df$GENDER_INDIVIDUAL== "F",1,0)
+
+#RUI MIN : create TRANSACTION_TYPE_DESCRIPTION_BRAND variable only has brand name value
+Transact.df$TRANSACTION_TYPE_DESCRIPTION_BRAND <- ifelse(Transact.df$TRANSACTION_TYPE_DESCRIPTION=="ESP" | Transact.df$TRANSACTION_TYPE_DESCRIPTION=="GFT"|
+                                                           Transact.df$TRANSACTION_TYPE_DESCRIPTION=="VLK" | Transact.df$TRANSACTION_TYPE_DESCRIPTION=="SVL"| 
+                                                           Transact.df$TRANSACTION_TYPE_DESCRIPTION=="INS" | Transact.df$TRANSACTION_TYPE_DESCRIPTION=="SHI"| 
+                                                           Transact.df$TRANSACTION_TYPE_DESCRIPTION=="SAL" | Transact.df$TRANSACTION_TYPE_DESCRIPTION=="PAG","", Transact.df$TRANSACTION_TYPE_DESCRIPTION)
+
+#RUI MIN: high income category variable
+Transact.df$HighIncome <- ifelse(Transact.df$INCOME>= 5,"Y","N")
+
+#####################Aggregate to household level, create variables you want#########################
+# NB: These are just example. Lots of opportunity for feature
+# engineering here.
+
+# NOTE: This will throw a warning, but that's OK ... 
+
+hh_transact <- subset(Transact.df,TRANSACTION_DATE_YR<=2004) %>% group_by(HOUSEHOLD_ID) %>%  
+  summarise(firstpurch = min(as.Date(TRANSACTION_DATE_2)),
+            lastpurch02 = max(as.Date(TRANSACTION_DATE_2[TRANSACTION_DATE_YR<=2002])), #most recent purchase as of 12-31-2002
+            purch98 = length(TRANSACTION_NBR[TRANSACTION_DATE_YR==1998]),
+            purch99 = length(TRANSACTION_NBR[TRANSACTION_DATE_YR==1999]),
+            purch00 = length(TRANSACTION_NBR[TRANSACTION_DATE_YR==2000]),
+            purch01 = length(TRANSACTION_NBR[TRANSACTION_DATE_YR==2001]),
+            purch02 = length(TRANSACTION_NBR[TRANSACTION_DATE_YR==2002]),
+            purch03 = length(TRANSACTION_NBR[TRANSACTION_DATE_YR==2003]),
+            purch04 = length(TRANSACTION_NBR[TRANSACTION_DATE_YR==2004]),
+            doll98 = sum(EXTENDED_PRICE[TRANSACTION_DATE_YR==1998]),
+            doll99 = sum(EXTENDED_PRICE[TRANSACTION_DATE_YR==1999]),
+            doll00 = sum(EXTENDED_PRICE[TRANSACTION_DATE_YR==2000]),
+            doll01 = sum(EXTENDED_PRICE[TRANSACTION_DATE_YR==2001]),
+            doll02 = sum(EXTENDED_PRICE[TRANSACTION_DATE_YR==2002]),
+            AGE_H_HEAD = first(AGE_H_HEAD),
+            CHILDERN_PRESENCE = first(CHILDERN_PRESENCE),
+            INCOME = first(INCOME),
+            GENDER_H_HEAD = first(GENDER_H_HEAD),
+            GENDER_INDIVIDUAL = first(GENDER_INDIVIDUAL),
+            MALE_CHID_AGE_0_2 = first(MALE_CHID_AGE_0_2),
+            MALE_CHID_AGE_3_5 = first(MALE_CHID_AGE_3_5),
+            MALE_CHID_AGE_6_10 = first(MALE_CHID_AGE_6_10),
+            MALE_CHID_AGE_11_15 = first(MALE_CHID_AGE_11_15),
+            MALE_CHID_AGE_16_17 = first(MALE_CHID_AGE_16_17),
+            FEMALE_CHID_AGE_0_2 = first(FEMALE_CHID_AGE_0_2),
+            FEMALE_CHID_AGE_3_5 = first(FEMALE_CHID_AGE_3_5),
+            FEMALE_CHID_AGE_6_10 = first(FEMALE_CHID_AGE_6_10),        
+            FEMALE_CHID_AGE_11_15 = first(FEMALE_CHID_AGE_11_15),
+            FEMALE_CHID_AGE_16_17 = first(FEMALE_CHID_AGE_16_17),       
+            UNKNOWN_CHID_AGE_0_2 = first(UNKNOWN_CHID_AGE_0_2),
+            UNKNOWN_CHID_AGE_3_5 = first(UNKNOWN_CHID_AGE_3_5),        
+            UNKNOWN_CHID_AGE_6_10 = first(UNKNOWN_CHID_AGE_6_10),
+            UNKNOWN_CHID_AGE_11_15 = first(UNKNOWN_CHID_AGE_11_15),      
+            UNKNOWN_CHID_AGE_16_17 = first(UNKNOWN_CHID_AGE_16_17),
+            numcat = n_distinct(CATEGORY_DESCRIPTION[TRANSACTION_DATE_YR>=1998 & TRANSACTION_DATE_YR<=2002]),
+            #RUI MIN:create numbrand based on TRANSACTION_TYPE_DESCRIPTION_BRAND
+            numbrand = n_distinct(TRANSACTION_TYPE_DESCRIPTION_BRAND[TRANSACTION_DATE_YR>=1998 & TRANSACTION_DATE_YR<=2002]), # modified Prof's coding
+            #new variables: total transactions in each category
+            num_cat_MUSIC = sum(cat_music[TRANSACTION_DATE_YR>=1998 & TRANSACTION_DATE_YR<=2002]),
+            num_cat_TV = sum(cat_TV[TRANSACTION_DATE_YR>=1998 & TRANSACTION_DATE_YR<=2002]),
+            num_cat_DVS = sum(cat_DVS[TRANSACTION_DATE_YR>=1998 & TRANSACTION_DATE_YR<=2002]),
+            num_cat_AUDIO = sum(cat_audio[TRANSACTION_DATE_YR>=1998 & TRANSACTION_DATE_YR<=2002]),
+            num_cat_VID_HDWR = sum(cat_vid_hdwr[TRANSACTION_DATE_YR>=1998 & TRANSACTION_DATE_YR<=2002]),
+            num_cat_PST = sum(cat_PST[TRANSACTION_DATE_YR>=1998 & TRANSACTION_DATE_YR<=2002]),
+            num_cat_VID_IMAGING = sum(cat_vid_IMAGING[TRANSACTION_DATE_YR>=1998 & TRANSACTION_DATE_YR<=2002]),
+            num_cat_HOME_INS = sum(cat_HOME_INS[TRANSACTION_DATE_YR>=1998 & TRANSACTION_DATE_YR<=2002]),
+            num_cat_MOBILE = sum(cat_MOBILE[TRANSACTION_DATE_YR>=1998 & TRANSACTION_DATE_YR<=2002]),
+            num_cat_WIRELESS = sum(cat_WIRELESS[TRANSACTION_DATE_YR>=1998 & TRANSACTION_DATE_YR<=2002]),
+            num_cat_PC_HDWR = sum(cat_PC_HDWR[TRANSACTION_DATE_YR>=1998 & TRANSACTION_DATE_YR<=2002]),
+            num_cat_MAJORS = sum(cat_MAJORS[TRANSACTION_DATE_YR>=1998 & TRANSACTION_DATE_YR<=2002]),
+            num_cat_GIFT_CARDS = sum(cat_GIFT_CARDS[TRANSACTION_DATE_YR>=1998 & TRANSACTION_DATE_YR<=2002]),
+            num_cat_EXPRESS = sum(cat_EXPRESS[TRANSACTION_DATE_YR>=1998 & TRANSACTION_DATE_YR<=2002]),
+            num_cat_INTABGIBLE = sum(cat_INTABGIBLE[TRANSACTION_DATE_YR>=1998 & TRANSACTION_DATE_YR<=2002]),
+            
+            
+            #new variables: Sum of each type of transaction
+            num_prod_purch = sum(product_purch[TRANSACTION_DATE_YR>=1998 & TRANSACTION_DATE_YR<=2002]),
+            num_prod_return = sum(product_return[TRANSACTION_DATE_YR>=1998 & TRANSACTION_DATE_YR<=2002]),
+            num_service_contract_purch = sum(service_contract_purch[TRANSACTION_DATE_YR>=1998 & TRANSACTION_DATE_YR<=2002]),
+            num_service_contract_return = sum(service_contract_return[TRANSACTION_DATE_YR>=1998 & TRANSACTION_DATE_YR<=2002]),
+            num_disc_prod_purch = sum(disc_prod_purch[TRANSACTION_DATE_YR>=1998 & TRANSACTION_DATE_YR<=2002]),
+            num_miscell = sum(miscell[TRANSACTION_DATE_YR>=1998 & TRANSACTION_DATE_YR<=2002]),
+            
+            #new variables: Total transactions by type description (non-brand codes)
+            num_ESP = sum(ESP[TRANSACTION_DATE_YR>=1998 & TRANSACTION_DATE_YR<=2002]),
+            num_GF_TRADEIN = sum(giftcard_tradein[TRANSACTION_DATE_YR>=1998 & TRANSACTION_DATE_YR<=2002]),
+            num_SVL = sum(SVL[TRANSACTION_DATE_YR>=1998 & TRANSACTION_DATE_YR<=2002]),
+            num_INS = sum(INS[TRANSACTION_DATE_YR>=1998 & TRANSACTION_DATE_YR<=2002]),
+            num_SHI = sum(SHI[TRANSACTION_DATE_YR>=1998 & TRANSACTION_DATE_YR<=2002]),
+            num_SAL = sum(SAL[TRANSACTION_DATE_YR>=1998 & TRANSACTION_DATE_YR<=2002]),
+            num_PAG = sum(PAG[TRANSACTION_DATE_YR>=1998 & TRANSACTION_DATE_YR<=2002]),
+            #new variables: Sum of each type of transaction
+            num_prod_purch = sum(product_purch[TRANSACTION_DATE_YR>=1998 & TRANSACTION_DATE_YR<=2002]),
+            num_prod_return = sum(product_return[TRANSACTION_DATE_YR>=1998 & TRANSACTION_DATE_YR<=2002]),
+            num_service_contract_purch = sum(service_contract_purch[TRANSACTION_DATE_YR>=1998 & TRANSACTION_DATE_YR<=2002]),
+            num_service_contract_return = sum(service_contract_return[TRANSACTION_DATE_YR>=1998 & TRANSACTION_DATE_YR<=2002]),
+            num_disc_prod_purch = sum(disc_prod_purch[TRANSACTION_DATE_YR>=1998 & TRANSACTION_DATE_YR<=2002]),
+            num_miscell = sum(miscell[TRANSACTION_DATE_YR>=1998 & TRANSACTION_DATE_YR<=2002]),
+            
+            #new variables: Total transactions by type description (non-brand codes)
+            num_ESP = sum(ESP[TRANSACTION_DATE_YR>=1998 & TRANSACTION_DATE_YR<=2002]),
+            num_GF_TRADEIN = sum(giftcard_tradein[TRANSACTION_DATE_YR>=1998 & TRANSACTION_DATE_YR<=2002]),
+            num_SVL = sum(SVL[TRANSACTION_DATE_YR>=1998 & TRANSACTION_DATE_YR<=2002]),
+            num_INS = sum(INS[TRANSACTION_DATE_YR>=1998 & TRANSACTION_DATE_YR<=2002]),
+            num_SHI = sum(SHI[TRANSACTION_DATE_YR>=1998 & TRANSACTION_DATE_YR<=2002]),
+            num_SAL = sum(SAL[TRANSACTION_DATE_YR>=1998 & TRANSACTION_DATE_YR<=2002]),
+            num_PAG = sum(PAG[TRANSACTION_DATE_YR>=1998 & TRANSACTION_DATE_YR<=2002]),
+            
+            num_online98= sum(ONLINE_TRANSACTION[TRANSACTION_DATE_YR==1998]),
+            num_online99= sum(ONLINE_TRANSACTION[TRANSACTION_DATE_YR==1999]),
+            num_online00= sum(ONLINE_TRANSACTION[TRANSACTION_DATE_YR==2000]),
+            num_online01= sum(ONLINE_TRANSACTION[TRANSACTION_DATE_YR==2001]),
+            num_online02= sum(ONLINE_TRANSACTION[TRANSACTION_DATE_YR==2002]),
+            
+            num_retuns98= sum(RETURN[TRANSACTION_DATE_YR==1998]),
+            num_retuns99= sum(RETURN[TRANSACTION_DATE_YR==1999]),
+            num_retuns00= sum(RETURN[TRANSACTION_DATE_YR==2000]),
+            num_retuns01= sum(RETURN[TRANSACTION_DATE_YR==2001]),
+            num_retuns02= sum(RETURN[TRANSACTION_DATE_YR==2002]),
+            
+            #HighIncome
+            HighIncome=first(HighIncome)
+  )
+# You will still need to deal with missings
+#  For numerics, maybe just use means; for factors maybe "UNKNOWN"
+
+# Below is one approach. There are many others.
+# means for income and age
+
+hh_transact$AGE_H_HEAD <- ifelse(is.na(hh_transact$AGE_H_HEAD), mean(hh_transact$AGE_H_HEAD,na.rm=TRUE),hh_transact$AGE_H_HEAD)
+hh_transact$INCOME <- ifelse(is.na(hh_transact$INCOME), mean(hh_transact$INCOME,na.rm=TRUE),hh_transact$INCOME)
+
+# New category for variables
+
+hh_transact$CHILDERN_PRESENCE <- as.factor(ifelse(hh_transact$CHILDERN_PRESENCE=="N" | hh_transact$CHILDERN_PRESENCE=="Y",hh_transact$CHILDERN_PRESENCE, "UNKNOWN"))
+hh_transact$GENDER_H_HEAD <- as.factor(hh_transact$GENDER_H_HEAD)
+hh_transact$GENDER_INDIVIDUAL <- as.factor(ifelse(hh_transact$GENDER_INDIVIDUAL=="F" | hh_transact$GENDER_INDIVIDUAL=="M" ,hh_transact$GENDER_INDIVIDUAL, "UNKNOWN"))
+hh_transact$HighIncome <- as.factor(ifelse(is.na(hh_transact$HighIncome),"UNKNOWN", hh_transact$HighIncome))
+# We want to get rid of those households that had their first purchase after 2002
+
+hh_transact <- hh_transact[year(hh_transact$firstpurch)<=2002,]
+
+
+# These will be useful in RFM calc
+
+hh_transact$numpurch <- hh_transact$purch98 + hh_transact$purch99 + hh_transact$purch00 + hh_transact$purch01 + hh_transact$purch02
+hh_transact$dollpurch <- hh_transact$doll98 + hh_transact$doll99 + hh_transact$doll00 + hh_transact$doll01 + hh_transact$doll02
+hh_transact$recent <- as.numeric(as.Date("2002-12-31")-as.Date(hh_transact$lastpurch02))
+
+
+################################################################################
+# RFM measures as of end of 2002
+
+# Recency Measure is most recent purchase
+# Frequency is purchase rate since acquired (purchases per )
+# Monetary is dollar purchase rate
+
+# Average purchase frequency from first purchase until end of 2002:
+
+hh_transact$frequent <- hh_transact$numpurch/(as.numeric(as.Date("2002-12-31")- hh_transact$firstpurch))*30
+
+# Average purchase amount from first purchase until end of 2002:
+
+hh_transact$monetary <- hh_transact$dollpurch/(as.numeric(as.Date("2002-12-31")- hh_transact$firstpurch))*30
+
+# Now put into "quintiles" - there are 19474 hh's, so lets do 4000 - 4000 - 4000 - 4000 - 3474
+
+hh_transact <- as.data.frame(hh_transact[order(hh_transact$recent),])
+hh_transact$rix <- 1:nrow(hh_transact) # recency index
+hh_transact$R_Q<-ceiling(hh_transact$rix/4000)
+
+hh_transact <- as.data.frame(hh_transact[order(-hh_transact$frequent),])
+hh_transact$fix <- 1:nrow(hh_transact) # frequency index
+hh_transact$F_Q<-ceiling(hh_transact$fix/4000)
+
+hh_transact <- as.data.frame(hh_transact[order(-hh_transact$monetary),])
+hh_transact$mix <- 1:nrow(hh_transact) # monetary index
+hh_transact$M_Q<-ceiling(hh_transact$mix/4000)
+
+# Create one RFM score
+
+hh_transact$RFMscore <- hh_transact$R_Q*100+hh_transact$F_Q*10+hh_transact$M_Q
+
+
+############################INDEPENDENT VARIABLE################################
+# The two basic "retention" measures: at least on purchase in 2003 ...
+
+hh_transact$ret03 <- (hh_transact$purch03>0)
+
+# ... at least one purchase in 2004
+
+hh_transact$ret04 <- (hh_transact$purch04>0)
+
+str(hh_transact)
+#describe(hh_transact$HighIncome)
+
+############################VARIABLES IN hh_transact############################
+# Variables we don't want to put into model as independent variables:
+# index 1-3,9-10(purch03&04), 77(numpurch),78(dollpurch), 82-87,89(ret03),90(ret04)
+
+# Dependent Variables:
+# index 89, 90
+
+
+
+################################################################################
+###########################PREDICTION ON RET03##################################
+# features + ret03
+Predict03 <- hh_transact[,c(4:8,11:76,79:81,88,89)]
+str(Predict03)
+
+############################SPLIT DATASET######################################
+set.seed(13343)
+#createDataPartition: balance on the dif classes across sample - same proportion of target class across samples
+train_ind <- createDataPartition(y = Predict03$ret03,p=.8,list = FALSE)
+training <- Predict03[train_ind,]
+test <- Predict03[-train_ind,]
+
+# Divide training sample to create validation sample 
+set.seed(13343)
+# assign 25% of training data as validation
+val_ind <- createDataPartition(y = training$ret03,p=.25,list = FALSE)
+val <- training[val_ind,]
+training <- training[-val_ind,]
+
+# To check balance
+prop.table(table(hh_transact$ret03))
+prop.table(table(training$ret03))
+prop.table(table(val$ret03))
+prop.table(table(test$ret03))
+
+dim(training)
+dim(val)
+dim(test)
+
+##################################
+##  LOGISTIC REGRESSION ANAYSIS ##
+##################################
+colnames(Predict03)
+model_logit <- glm(ret03 ~ purch98+purch99+purch00+purch01+purch02+doll98+doll99+doll00+doll01+doll02
+                   +CHILDERN_PRESENCE+INCOME+GENDER_H_HEAD+GENDER_INDIVIDUAL+MALE_CHID_AGE_0_2
+                   +MALE_CHID_AGE_3_5+MALE_CHID_AGE_6_10+MALE_CHID_AGE_11_15+MALE_CHID_AGE_16_17
+                   +FEMALE_CHID_AGE_0_2+FEMALE_CHID_AGE_3_5+FEMALE_CHID_AGE_6_10+FEMALE_CHID_AGE_11_15
+                   +FEMALE_CHID_AGE_16_17+UNKNOWN_CHID_AGE_0_2+UNKNOWN_CHID_AGE_3_5+UNKNOWN_CHID_AGE_6_10
+                   +UNKNOWN_CHID_AGE_11_15+UNKNOWN_CHID_AGE_16_17+numcat+numbrand+num_cat_MUSIC+num_cat_TV+num_cat_DVS
+                   +num_cat_AUDIO+num_cat_VID_HDWR+num_cat_PST+num_cat_VID_IMAGING+num_cat_HOME_INS+num_cat_MOBILE
+                   +num_cat_WIRELESS+num_cat_PC_HDWR+num_cat_MAJORS+num_cat_GIFT_CARDS+num_cat_EXPRESS+num_cat_INTABGIBLE
+                   +num_prod_purch+num_prod_return+num_service_contract_purch+num_service_contract_return+num_disc_prod_purch
+                   +num_miscell+num_ESP+num_GF_TRADEIN+num_SVL+num_INS+num_SHI+num_SAL+num_PAG+num_online98+num_online99
+                   +num_online00+num_online01+num_online02+num_retuns98+num_retuns99+num_retuns00+num_retuns01+num_retuns02
+                   +HighIncome+recent+frequent+monetary+RFMscore, 
+                   data = training, family = "binomial"(link = "logit"))
+summary(model_logit)
+#AIC=11786
+
+# Obviously too many variables here so we'll do "step-wise" modeling that adds/subtracts variables
+# in an effort to find the "best" model according to some criterion. Here, it's the AIC with respect
+# to the training sample. AIC is a measure of fit (like R-squared) with a penalty term to reduce
+# complexity
+
+summary(model_logit_step <- stepAIC(model_logit, direction = "both",trace = 1))
+
+# The following is the "best" model
+
+model_logit_step <- glm(formula = ret03 ~ purch98 + purch99 + purch00 + purch01 + 
+                          purch02 + doll01 + CHILDERN_PRESENCE + INCOME + GENDER_INDIVIDUAL + 
+                          MALE_CHID_AGE_6_10 + MALE_CHID_AGE_16_17 + FEMALE_CHID_AGE_11_15 + 
+                          UNKNOWN_CHID_AGE_0_2 + numcat + numbrand + num_cat_MUSIC + 
+                          num_cat_TV + num_cat_DVS + num_cat_AUDIO + num_cat_VID_HDWR + 
+                          num_cat_PST + num_cat_VID_IMAGING + num_cat_MOBILE + num_cat_WIRELESS + 
+                          num_cat_PC_HDWR + num_cat_MAJORS + num_cat_INTABGIBLE + num_prod_purch + 
+                          num_prod_return + num_service_contract_purch + num_disc_prod_purch + 
+                          num_SHI + num_SAL + num_retuns99 + num_retuns00 + num_retuns01 + 
+                          num_retuns02 + recent + RFMscore, family = binomial(link = "logit"), 
+                        data = training)
+summary(model_logit_step)
+#AIC: 11735
+
+# Let's now see how well it predicts the validation sample
+# (you may receive a warning --> don't worry)
+
+logit_probs <- predict(model_logit_step, newdata = val, type = "response")
+logit_class <- rep("1",nrow(val))
+logit_class[logit_probs < 0.2448652] <- "0" # This is the Pr[ret03] in the data
+prop.table(table(hh_transact$ret03))
+
+# Confusion Matrix - Note that we need to define what a "positive" outcome is
+val$ret03_lm <- ifelse(val$ret03==TRUE,1,0)
+logit_class <- as.factor(logit_class)
+confusionMatrix(logit_class, positive = "1", as.factor(val$ret03_lm))
+
+
+val_class <- val$ret03_lm
+
+logistic_ROC_prediction <- ROCR::prediction(logit_probs,val_class)
+logit_ROC <- performance(logistic_ROC_prediction,"tpr","fpr") # true positive rate, false positive rate
+plot(logit_ROC)
+
+# AUC (Area under the curve)
+# AUC of a perfect classifier is 100%, a random guess is 50%)
+
+AUC.tmp <- performance(logistic_ROC_prediction,"auc")
+logit_AUC <- as.numeric(AUC.tmp@y.values)
+logit_AUC
+
+# Plot the "lift"
+
+plotLift(logit_probs,val_class, cumulative = TRUE, n.buckets = 10)
+
+
+#################################
+##  C5.0 DECISION TREE ANAYSIS ##
+#################################
+set.seed(13343)
+dt_Predict03 <- c(1:75) 
+dtmodel <- C5.0(training[,dt_Predict03],as.factor(training[,76])) 
+summary(dtmodel)
+dt_class <- predict(dtmodel,val[,dt_Predict03])
+confusionMatrix(dt_class, positive = "TRUE", as.factor(val$ret03))
+
+####################
+##  Random Forest ##
+####################
+set.seed(13343)
+rf_model <- randomForest(training[,dt_Predict03],as.factor(training[,76]),ntree = 150,na.action = na.roughfix) 
+show(rf_model)
+rf_class <- predict(rf_model,val[,dt_Predict03],type="response")
+rfconfmat <- confusionMatrix(rf_class, positive = "TRUE", as.factor(val$ret03))
+rfconfmat
+
+####################
+## Adaptive Boosting ##
+####################
+ab_model <- C5.0(training[,dt_Predict03],as.factor(training[,76]), trials = 10) # TRIALS ALLOWS ADAPTIVE BOOSTING
+summary(ab_model)
+ab_class <- predict(ab_model,val[,dt_Predict03])
+confusionMatrix(dt_class, positive = "TRUE", as.factor(val$ret03))
+
+
+########################################
+## Oversampling (on decision tree)######
+########################################
+
+# Here we augment the training data by adding more observations in the target
+#  class ("1"). We make them 50/50.
+
+
+pos_needed <- nrow(training[training$ret03==0,])  # at 50/50 we need as many pos as neg
+pos_corpus <- training[training$ret03==1,]
+neg_corpus <- training[training$ret03==0,]
+
+
+#create vector of pos_needed integers to sample the positives
+# NOTE: this is sampling WITH replacement
+
+set.seed(13343)
+drawvec <- floor(runif(pos_needed, min=1, nrow(pos_corpus)))
+
+# randomly draw from pos corpus and add to to negative to form new
+#  training set
+
+for (i in 1:pos_needed){
+  neg_corpus <- rbind(neg_corpus,pos_corpus[drawvec[i],])
+} 
+
+# "os" = oversampling
+
+os_training <- neg_corpus
+
+##Applying oversampling to Decision Tree Analysis
+dt_Predict03 <- c(1:75) 
+dtmodel <- C5.0(os_training[,dt_Predict03],as.factor(os_training[,76])) 
+summary(dtmodel)
+dt_class <- predict(dtmodel,val[,dt_Predict03])
+confusionMatrix(dt_class, positive = "TRUE", as.factor(val$ret03))
+
+
+#######################################
+# Oversampling plus random forest#####
+######################################
+dt_Predict03 <- c(1:75) 
+set.seed(13343)
+rf_model <- randomForest(os_training[,dt_Predict03],as.factor(os_training[,76]),ntree = 150,na.action = na.roughfix) 
+show(rf_model)
+rf_class <- predict(rf_model,val[,dt_Predict03],type="response")
+rfconfmat <- confusionMatrix(rf_class, positive = "TRUE", as.factor(val$ret03))
+rfconfmat
+
+##########################################
+## Oversampling plus Adaptive boosting ##
+##########################################
+
+# consider boosting by adjusting "trials" option in c5.0 call
+dt_Predict03 <- c(1:75) # selects the columns that aren't dates
+set.seed(13343)
+dtmodel <- C5.0(os_training[,dt_Predict03],as.factor(os_training[,76]), trials = 10) # TRIALS ALLOWS ADAPTIVE BOOSTING
+summary(dtmodel)
+dt_class <- predict(dtmodel,val[,dt_Predict03])
+confusionMatrix(dt_class, positive = "TRUE", as.factor(val$ret03))
+
+
+###################################################
+### Oversampling plus the "best" logit model######
+###################################################
+
+# The following is the "best" model
+
+model_logit_step <- glm(formula = ret03 ~ purch98 + purch99 + purch00 + purch01 + 
+                          purch02 + doll01 + CHILDERN_PRESENCE + INCOME + GENDER_INDIVIDUAL + 
+                          MALE_CHID_AGE_6_10 + MALE_CHID_AGE_16_17 + FEMALE_CHID_AGE_11_15 + 
+                          UNKNOWN_CHID_AGE_0_2 + numcat + numbrand + num_cat_MUSIC + 
+                          num_cat_TV + num_cat_DVS + num_cat_AUDIO + num_cat_VID_HDWR + 
+                          num_cat_PST + num_cat_VID_IMAGING + num_cat_MOBILE + num_cat_WIRELESS + 
+                          num_cat_PC_HDWR + num_cat_MAJORS + num_cat_INTABGIBLE + num_prod_purch + 
+                          num_prod_return + num_service_contract_purch + num_disc_prod_purch + 
+                          num_SHI + num_SAL + num_retuns99 + num_retuns00 + num_retuns01 + 
+                          num_retuns02 + recent + RFMscore, 
+                        family = binomial(link = "logit"), data = os_training)
+summary(model_logit_step)
+
+logit_probs <- predict(model_logit_step, newdata = val, type = "response")
+logit_class <- rep("1",nrow(val))
+logit_class[logit_probs < 0.246996] <- "0" # This is the Pr[ret03] in the data
+
+logit_class <- as.factor(logit_class)
+val$ret03_lm <- ifelse(val$ret03==TRUE,1,0)
+confusionMatrix(logit_class, positive = "1", as.factor(val$ret03_lm))
+# Accuracy : 0.6914 (approximately the same)  
+# Sensitivity : 0.6524  (unchanged)????     
+# Specificity : 0.7045
+
+
+##########################
+##ANN with Oversampling##
+##########################
+os_training_n <- normalize(os_training[,1:(ncol(os_training)-1)]) #Normalization reduces to [0,1] 
+os_training_n$ret03 <- os_training[,ncol(os_training)]
+val_n <- normalize(val[,1:(ncol(val)-1)]) #Normalization reduces to [0,1] 
+val_n$ret03 <- val[,ncol(val)]
+test_n <- normalize(test[,1:(ncol(test)-1)])
+test_n$ret03 <- test[,ncol(test)]    
+
+
+os_training_n <- one_hot(as.data.table(os_training_n))
+test_n <- one_hot(as.data.table(test_n))
+val_n <- one_hot(as.data.table(val_n))
+
+os_training_n$ret03 = as.factor(os_training$ret03)
+val_n$ret03 = as.factor(val_n$ret03)
+
+
+model_NN <- train(ret03 ~ purch98 + purch99 + purch00 + purch01 + purch02 + doll01 + 
+                  CHILDERN_PRESENCE_N + CHILDERN_PRESENCE_UNKNOWN + INCOME + GENDER_H_HEAD_M + GENDER_H_HEAD_F + GENDER_H_HEAD_U +
+                  GENDER_INDIVIDUAL_F + GENDER_INDIVIDUAL_M + GENDER_INDIVIDUAL_UNKNOWN + FEMALE_CHID_AGE_11_15 + FEMALE_CHID_AGE_16_17 +
+                  UNKNOWN_CHID_AGE_0_2 + numcat + numbrand + RFMscore , 
+                  data = os_training_n, method = "nnet", trace = TRUE,
+                  na.action = na.omit)
+
+nn_class <- predict(model_NN,newdata = val_n)
+nn_class <- ifelse(nn_class==TRUE,1,0)
+plot(model_NN)
+
+confusionMatrix(as.factor(nn_class), positive = "1", as.factor(val_n$ret03))
+
+#nn_class <- predict(model_NN,newdata = test)
+#confusionMatrix(as.factor(nn_class), positive = "TRUE", as.factor(test$ret03))
+
+########################################
+## undersampling on decision tree######
+########################################
+
+# Here we remove negative ("0")  observations to reduce their concentration and
+#  again make them 50/50.
+
+pos_corpus <- training[training$ret03==1,]
+neg_corpus <- training[training$ret03==0,]
+
+#create vector of neg_need2drop integers to drop the negs
+
+neg_need2drop <- nrow(neg_corpus)-nrow(pos_corpus)
+
+# Notice here I can't pre-draw the indexes because the probabilities change as
+#  the table shrinks
+
+set.seed(13343)
+for (i in 1:neg_need2drop){
+  ix_drop <- floor(runif(1,min=1,max=(nrow(neg_corpus)+1)))
+  neg_corpus <- neg_corpus[-ix_drop,]
+} 
+
+us_training <- rbind(neg_corpus,pos_corpus)
+
+dt_Predict03 <- c(1:75) 
+set.seed(13343)
+dtmodel <- C5.0(us_training[,dt_Predict03],as.factor(us_training[,76])) 
+summary(dtmodel)
+dt_class <- predict(dtmodel,val[,dt_Predict03])
+confusionMatrix(dt_class, positive = "TRUE", as.factor(val$ret03))
+
+
+#######################################
+# Undersampling plus random forest#####
+######################################
+dt_Predict03 <- c(1:75) 
+set.seed(13343)
+rf_model <- randomForest(us_training[,dt_Predict03],as.factor(us_training[,76]),ntree = 150,na.action = na.roughfix) 
+show(rf_model)
+rf_class <- predict(rf_model,val[,dt_Predict03],type="response")
+rfconfmat <- confusionMatrix(rf_class, positive = "TRUE", as.factor(val$ret03))
+rfconfmat
+
+
+##########################################
+## undersampling plus Adaptive boosting ##
+##########################################
+
+# consider boosting by adjusting "trials" option in c5.0 call
+dt_Predict03 <- c(1:75) # selects the columns that aren't dates
+set.seed(13343)
+dtmodel <- C5.0(us_training[,dt_Predict03],as.factor(us_training[,76]), trials = 10) # TRIALS ALLOWS ADAPTIVE BOOSTING
+summary(dtmodel)
+dt_class <- predict(dtmodel,val[,dt_Predict03])
+confusionMatrix(dt_class, positive = "TRUE", as.factor(val$ret03))
+
+###################################################
+### undersampling plus the "best" logit model######
+###################################################
+
+# The following is the "best" model
+
+model_logit_step <- glm(formula = ret03 ~ purch98 + purch99 + purch00 + purch01 + 
+                          purch02 + doll01 + CHILDERN_PRESENCE + INCOME + GENDER_INDIVIDUAL + 
+                          MALE_CHID_AGE_6_10 + MALE_CHID_AGE_16_17 + FEMALE_CHID_AGE_11_15 + 
+                          UNKNOWN_CHID_AGE_0_2 + numcat + numbrand + num_cat_MUSIC + 
+                          num_cat_TV + num_cat_DVS + num_cat_AUDIO + num_cat_VID_HDWR + 
+                          num_cat_PST + num_cat_VID_IMAGING + num_cat_MOBILE + num_cat_WIRELESS + 
+                          num_cat_PC_HDWR + num_cat_MAJORS + num_cat_INTABGIBLE + num_prod_purch + 
+                          num_prod_return + num_service_contract_purch + num_disc_prod_purch + 
+                          num_SHI + num_SAL + num_retuns99 + num_retuns00 + num_retuns01 + 
+                          num_retuns02 + recent + RFMscore, 
+                        family = binomial(link = "logit"), data = us_training)
+summary(model_logit_step)
+
+logit_probs <- predict(model_logit_step, newdata = val, type = "response")
+logit_class <- rep("1",nrow(val))
+logit_class[logit_probs < 0.2448652] <- "0" # This is the Pr[ret03] in the data
+
+logit_class <- as.factor(logit_class)
+val$ret03_lm <- ifelse(val$ret03==TRUE,1,0)
+confusionMatrix(logit_class, positive = "1", as.factor(val$ret03_lm))
+
+
+
+##########################
+##ANN with undersampling##
+##########################
+
+# Compare with a NN
+
+library(mltools)
+library(data.table)
+
+us_training_n <- normalize(us_training[,1:(ncol(us_training)-1)]) #Normalization reduces to [0,1] 
+us_training_n$ret03 <- us_training[,ncol(us_training)]
+val_n <- normalize(val[,1:(ncol(val)-1)]) #Normalization reduces to [0,1] 
+val_n$ret03 <- val[,ncol(val)]
+   
+
+us_training_n <- one_hot(as.data.table(us_training_n))
+val_n <- one_hot(as.data.table(val_n))
+
+us_training_n$ret03 = as.factor(us_training_n$ret03)
+
+model_NN <- train(ret03 ~ purch98 + purch99 + purch00 + purch01 + purch02 + doll01 + 
+                    CHILDERN_PRESENCE_N + CHILDERN_PRESENCE_UNKNOWN + INCOME + GENDER_H_HEAD_M + GENDER_H_HEAD_F + GENDER_H_HEAD_U +
+                    GENDER_INDIVIDUAL_F + GENDER_INDIVIDUAL_M + GENDER_INDIVIDUAL_UNKNOWN + FEMALE_CHID_AGE_11_15 + FEMALE_CHID_AGE_16_17 +
+                    UNKNOWN_CHID_AGE_0_2 + numcat + numbrand + RFMscore , 
+                  data = us_training_n, method = "nnet", trace = TRUE,
+                  na.action = na.omit)
+
+nn_class <- predict(model_NN,newdata = val_n)
+nn_class <- ifelse(nn_class==TRUE,1,0)
+plot(model_NN)
+
+confusionMatrix(as.factor(nn_class), positive = "1", as.factor(val_n$ret03))
+
+####################################
+##Feature Importance for ANN model##
+####################################
+
+
+require(devtools)
+#import 'gar.fun' from beckmw's Github - this is Garson's algorithm
+source_gist('6206737')
+
+#use the function on the model created above
+plotdata = gar.fun('ret03',model_NN)
+plotdata$data
+plotdata
+
+##################################
+##ANN with undersampling Testing##
+##################################
+test_n <- normalize(test[,1:(ncol(test)-1)])
+test_n$ret03 <- test[,ncol(test)] 
+test_n <- one_hot(as.data.table(test_n))
+
+nn_class <- predict(model_NN,newdata = test_n)
+confusionMatrix(as.factor(nn_class), positive = "TRUE", as.factor(test_n$ret03))
+
+Predict04 <- hh_transact[,c(4:8,11:76,79:81,88,90)]
+Predict04
+
+Predict04_n <- normalize(Predict04[,1:(ncol(Predict04)-1)])
+Predict04_n$ret04 <- Predict04[,ncol(Predict04)] 
+Predict04_n <- one_hot(as.data.table(Predict04_n))
+
+nn_class <- predict(model_NN,newdata = Predict04_n)
+confusionMatrix(as.factor(nn_class), positive = "TRUE", as.factor(Predict04_n$ret04))
+
+
+
